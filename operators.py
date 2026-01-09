@@ -314,3 +314,65 @@ class BF_OT_SetUnused(Operator):
         
         self.report({'INFO'}, f"Marked {count} glyphs as unused")
         return {'FINISHED'}
+
+
+class BF_OT_CopyCharInfo(Operator):
+    """Copy active character information to clipboard"""
+    bl_idname = "bfont.copy_char_info"
+    bl_label = "Copy Character Info"
+    bl_options = {'REGISTER'}
+    
+    format_type: bpy.props.EnumProperty(
+        name="Format",
+        description="Format to copy",
+        items=[
+            ('CHAR', "Character", "Copy the character itself"),
+            ('UNICODE', "Unicode", "Copy Unicode format (U+XXXX)"),
+            ('DECIMAL', "Decimal", "Copy decimal value"),
+            ('HEX', "Hexadecimal", "Copy hex value (0xXX)"),
+            ('HTML', "HTML Entity", "Copy HTML entity (&#XXXX;)"),
+            ('ALL', "All Formats", "Copy all formats as text"),
+        ],
+        default='ALL'
+    )
+    
+    def execute(self, context):
+        if not context.active_object or context.active_object.type != 'CURVE':
+            self.report({'WARNING'}, "No curve object selected")
+            return {'CANCELLED'}
+        
+        if not context.active_object.get("glyph_name") or not context.active_object.get("unicode"):
+            self.report({'WARNING'}, "Selected object is not a font glyph")
+            return {'CANCELLED'}
+        
+        unicode_val = context.active_object.get("unicode")
+        char = chr(unicode_val)
+        glyph_name = context.active_object.get("glyph_name")
+        
+        # Build the text to copy based on format
+        if self.format_type == 'CHAR':
+            text = char
+        elif self.format_type == 'UNICODE':
+            text = f"U+{unicode_val:04X}"
+        elif self.format_type == 'DECIMAL':
+            text = str(unicode_val)
+        elif self.format_type == 'HEX':
+            text = f"0x{unicode_val:02X}"
+        elif self.format_type == 'HTML':
+            text = f"&#{unicode_val};"
+        else:  # ALL
+            text = f"""Character: {char}
+Unicode: U+{unicode_val:04X}
+Decimal: {unicode_val}
+Hex: 0x{unicode_val:02X}
+HTML: &#{unicode_val};
+Glyph Name: {glyph_name}"""
+        
+        # Copy to clipboard (Windows)
+        context.window_manager.clipboard = text
+        
+        self.report({'INFO'}, f"Copied to clipboard: {self.format_type}")
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)

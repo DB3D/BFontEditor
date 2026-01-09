@@ -11,6 +11,38 @@ class BF_PT_MainPanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         
+        # Active Character Info
+        if context.active_object and context.active_object.type == 'CURVE':
+            if context.active_object.get("glyph_name") and context.active_object.get("unicode"):
+                box = layout.box()
+                box.label(text="Active Character:", icon='FONT_DATA')
+                
+                # Display character in different formats using StringProperties
+                row = box.row()
+                row.enabled = False
+                row.prop(context.scene, "bfont_char", text="Char")
+                
+                row = box.row()
+                row.enabled = False
+                row.prop(context.scene, "bfont_unicode", text="Unicode")
+                
+                row = box.row()
+                row.enabled = False
+                row.prop(context.scene, "bfont_decimal", text="Decimal")
+                
+                row = box.row()
+                row.enabled = False
+                row.prop(context.scene, "bfont_hex", text="Hex")
+                
+                row = box.row()
+                row.enabled = False
+                row.prop(context.scene, "bfont_glyph_name", text="Glyph")
+                
+                # Copy button
+                box.operator("bfont.copy_char_info", text="Copy to Clipboard", icon='COPYDOWN')
+                
+                layout.separator()
+        
         # File path display
         box = layout.box()
         box.label(text="Font File:")
