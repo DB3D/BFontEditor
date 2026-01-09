@@ -50,15 +50,27 @@ class BF_OT_RefreshFont(Operator):
 
 
 class BF_OT_GroupToCenter(Operator):
-    """Move all selected glyphs to origin"""
+    """Move all guide meshes (parents) to origin"""
     bl_idname = "bfont.group_to_center"
     bl_label = "Group to Center"
     bl_options = {'REGISTER', 'UNDO'}
     
     def execute(self, context):
-        for obj in context.selected_objects:
-            if obj.get("glyph_name"):
-                obj.location = (0, 0, 0)
+        # Find all guide meshes (parents of glyphs) - no selection needed
+        guide_meshes = []
+        for obj in context.scene.objects:
+            # Look for objects with children that have glyph_name
+            if obj.children:
+                for child in obj.children:
+                    if child.get("glyph_name"):
+                        guide_meshes.append(obj)
+                        break
+        
+        # Move all guide meshes to origin
+        for guide in guide_meshes:
+            guide.location = (0, 0, 0)
+        
+        self.report({'INFO'}, f"Centered {len(guide_meshes)} glyphs")
         return {'FINISHED'}
 
 
@@ -83,22 +95,29 @@ class BF_OT_GroupOrderly(Operator):
     )
     
     def execute(self, context):
-        # Get all glyph objects
-        glyphs = [obj for obj in context.selected_objects if obj.get("glyph_name")]
+        # Find all guide meshes (parents) with their glyph children - no selection needed
+        guide_data = []
+        for obj in context.scene.objects:
+            if obj.children:
+                for child in obj.children:
+                    if child.get("glyph_name"):
+                        unicode_val = child.get("unicode", 999999)
+                        guide_data.append((obj, unicode_val))
+                        break
         
-        # Sort by unicode if available, otherwise by name
-        glyphs.sort(key=lambda obj: obj.get("unicode", 999999))
+        # Sort by unicode
+        guide_data.sort(key=lambda x: x[1])
         
-        # Arrange in grid
-        for i, obj in enumerate(glyphs):
+        # Arrange guide meshes in grid
+        for i, (guide, _) in enumerate(guide_data):
             row = i // self.items_per_row
             col = i % self.items_per_row
             
-            obj.location.x = col * self.spacing
-            obj.location.y = -row * self.spacing
-            obj.location.z = 0
+            guide.location.x = col * self.spacing
+            guide.location.y = -row * self.spacing
+            guide.location.z = 0
         
-        self.report({'INFO'}, f"Arranged {len(glyphs)} glyphs in grid")
+        self.report({'INFO'}, f"Arranged {len(guide_data)} glyphs in grid")
         return {'FINISHED'}
     
     def invoke(self, context, event):
@@ -106,51 +125,98 @@ class BF_OT_GroupOrderly(Operator):
 
 
 class BF_OT_DisplayAsText(Operator):
-    """Display the font as text"""
+    """Display the font as a Blender text object"""
     bl_idname = "bfont.display_as_text"
     bl_label = "Display as Text"
     bl_options = {'REGISTER', 'UNDO'}
     
-    text_content: bpy.props.StringProperty(
-        name="Text",
-        default="AaBbCc 123",
-        maxlen=1024
-    )
-    
-    spacing: bpy.props.FloatProperty(
-        name="Spacing",
-        default=1.2,
-        min=0.1,
-        max=10.0
-    )
-    
     def execute(self, context):
-        # Get all glyph objects in the scene
-        glyph_map = {}
-        for obj in context.scene.objects:
-            if obj.get("glyph_name"):
-                unicode_val = obj.get("unicode")
-                if unicode_val:
-                    glyph_map[chr(unicode_val)] = obj
-        
-        if not glyph_map:
-            self.report({'ERROR'}, "No font glyphs found. Import a font first.")
+        # Get the stored font filepath
+        filepath = context.scene.bfont_filepath if hasattr(context.scene, 'bfont_filepath') else ""
+        if not filepath:
+            self.report({'ERROR'}, "No font file loaded. Import a font first.")
             return {'CANCELLED'}
         
-        # Position each character
-        x_offset = 0
-        for char in self.text_content:
-            if char in glyph_map:
-                obj = glyph_map[char]
-                obj.location.x = x_offset
-                obj.location.y = 0
-                obj.location.z = 0
-                x_offset += self.spacing
-            elif char == ' ':
-                x_offset += self.spacing * 0.5
+        # Load the font into Blender
+        try:
+            font_data = bpy.data.fonts.load(filepath)
+        except:
+            self.report({'ERROR'}, f"Could not load font from {filepath}")
+            return {'CANCELLED'}
         
-        self.report({'INFO'}, f"Displayed text: {self.text_content}")
+        # Create text curve object
+        text_curve = bpy.data.curves.new(name="FontDisplay", type='FONT')
+        text_curve.font = font_data
+        
+        # Get all available characters with unicode values
+        char_list = []
+        for obj in context.scene.objects:
+            if obj.get("glyph_name") and obj.get("unicode"):
+                unicode_val = obj.get("unicode")
+                char_list.append((unicode_val, chr(unicode_val)))
+        
+        # Sort by unicode value
+        char_list.sort(key=lambda x: x[0])
+        
+        # Build text string with all characters
+        text_content = ''.join([char for _, char in char_list])
+        text_curve.body = text_content
+        
+        # Set text properties
+        text_curve.size = 1.0
+        text_curve.space_character = 1.2
+        
+        # Create object
+        text_obj = bpy.data.objects.new("FontDisplay", text_curve)
+        context.collection.objects.link(text_obj)
+        text_obj.location = (0, 0, 0)
+        
+        self.report({'INFO'}, f"Created text display with {len(char_list)} characters")
         return {'FINISHED'}
+
+
+class BF_OT_RefreshTextDisplay(Operator):
+    """Refresh the text display object with updated font"""
+    bl_idname = "bfont.refresh_text_display"
+    bl_label = "Refresh Text Display"
+    bl_options = {'REGISTER', 'UNDO'}
     
-    def invoke(self, context, event):
-        return context.window_manager.invoke_props_dialog(self)
+    def execute(self, context):
+        # Find existing FontDisplay object
+        text_obj = None
+        for obj in context.scene.objects:
+            if obj.type == 'FONT' and obj.name.startswith("FontDisplay"):
+                text_obj = obj
+                break
+        
+        if not text_obj:
+            self.report({'WARNING'}, "No text display found. Creating new one.")
+            return bpy.ops.bfont.display_as_text()
+        
+        # Get the stored font filepath
+        filepath = context.scene.bfont_filepath if hasattr(context.scene, 'bfont_filepath') else ""
+        if not filepath:
+            self.report({'ERROR'}, "No font file loaded.")
+            return {'CANCELLED'}
+        
+        # Reload the font
+        try:
+            font_data = bpy.data.fonts.load(filepath)
+            text_obj.data.font = font_data
+        except:
+            self.report({'ERROR'}, f"Could not reload font from {filepath}")
+            return {'CANCELLED'}
+        
+        # Update character list
+        char_list = []
+        for obj in context.scene.objects:
+            if obj.get("glyph_name") and obj.get("unicode"):
+                unicode_val = obj.get("unicode")
+                char_list.append((unicode_val, chr(unicode_val)))
+        
+        char_list.sort(key=lambda x: x[0])
+        text_content = ''.join([char for _, char in char_list])
+        text_obj.data.body = text_content
+        
+        self.report({'INFO'}, f"Refreshed text display with {len(char_list)} characters")
+        return {'FINISHED'}

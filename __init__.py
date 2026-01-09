@@ -14,7 +14,8 @@ from .operators import (
     BF_OT_RefreshFont,
     BF_OT_GroupToCenter,
     BF_OT_GroupOrderly,
-    BF_OT_DisplayAsText
+    BF_OT_DisplayAsText,
+    BF_OT_RefreshTextDisplay
 )
 
 bl_info = {
@@ -36,6 +37,7 @@ classes = (
     BF_OT_GroupToCenter,
     BF_OT_GroupOrderly,
     BF_OT_DisplayAsText,
+    BF_OT_RefreshTextDisplay,
     BF_PT_MainPanel,
 )
 

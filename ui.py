@@ -38,4 +38,11 @@ class BF_PT_MainPanel(bpy.types.Panel):
         box.label(text="Utilities:")
         box.operator("bfont.group_to_center", text="Group to Center", icon='SNAP_FACE_CENTER')
         box.operator("bfont.group_orderly", text="Group Orderly", icon='GRID')
+        
+        layout.separator()
+        
+        # Text Display
+        box = layout.box()
+        box.label(text="Text Display:")
         box.operator("bfont.display_as_text", text="Display as Text", icon='FONT_DATA')
+        box.operator("bfont.refresh_text_display", text="Refresh Text", icon='FILE_REFRESH')

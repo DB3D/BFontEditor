@@ -31,13 +31,9 @@ def import_ttf_file(filepath, context):
     
     # Get font metrics
     units_per_em = font['head'].unitsPerEm if 'head' in font else 1000
+    ascender = font['hhea'].ascender if 'hhea' in font else units_per_em * 0.8
+    descender = font['hhea'].descender if 'hhea' in font else -units_per_em * 0.2
     scale = 1.0 / units_per_em
-    
-    # Create bounding box guides (circle within square within square)
-    guides_parent, guide_objects = create_bounding_guides(font, scale)
-    collection.objects.link(guides_parent)
-    for guide_obj in guide_objects:
-        collection.objects.link(guide_obj)
     
     # Iterate over glyph order to be comprehensive
     glyph_order = font.getGlyphOrder()
@@ -62,17 +58,26 @@ def import_ttf_file(filepath, context):
             obj = bpy.data.objects.new(glyph_name, curve_data)
             collection.objects.link(obj)
             
-            # Store original glyph name
+            # Store original glyph name and unicode
             obj["glyph_name"] = glyph_name 
             
-            # Try to find unicode for identification
+            unicode_code = None
             for code, name in cmap.items():
                 if name == glyph_name:
                     obj["unicode"] = code
+                    unicode_code = code
                     break
             
-            # Parent to guides
-            obj.parent = guides_parent
+            # Create bounding guide mesh for THIS glyph
+            guide_mesh = create_glyph_bounding_mesh(glyph_name, units_per_em, ascender, descender, scale)
+            collection.objects.link(guide_mesh)
+            
+            # Both at same origin (lower left corner of glyph)
+            obj.location = (0, 0, 0)
+            guide_mesh.location = (0, 0, 0)
+            
+            # Parent the font char to the guide mesh
+            obj.parent = guide_mesh
                 
         except Exception as e:
             print(f"Error processing glyph {glyph_name}: {e}")
@@ -80,109 +85,68 @@ def import_ttf_file(filepath, context):
     return {'FINISHED'}
 
 
-def create_bounding_guides(font, scale):
-    """Create circle within square within square as visual guides"""
-    # Get font metrics
-    units_per_em = font['head'].unitsPerEm if 'head' in font else 1000
-    ascender = font['hhea'].ascender if 'hhea' in font else units_per_em * 0.8
-    descender = font['hhea'].descender if 'hhea' in font else -units_per_em * 0.2
+def create_glyph_bounding_mesh(glyph_name, units_per_em, ascender, descender, scale):
+    """Create a mesh object with circle within square within square for a glyph"""
+    import bmesh
     
-    # Create parent empty
-    guides_parent = bpy.data.objects.new("BoundingGuides", None)
-    guides_parent.empty_display_type = 'PLAIN_AXES'
-    guides_parent.empty_display_size = 0.1 * scale
+    mesh = bpy.data.meshes.new(f"{glyph_name}_Guide")
+    bm = bmesh.new()
     
-    guide_objects = []
+    # Mesh offset
+    offset_x = 0.5
+    offset_y = -0.097
     
-    # Outer square (em square)
-    outer_square = create_square_curve("EmSquare", units_per_em * scale, scale)
-    outer_square.parent = guides_parent
-    outer_square.location.y = (ascender + descender) / 2 * scale
-    guide_objects.append(outer_square)
+    # Calculate dimensions
+    em_size = units_per_em * scale
+    inner_size = em_size * 0.7
+    circle_radius = em_size * 0.5
     
-    # Inner square (smaller reference)
-    inner_square = create_square_curve("InnerSquare", units_per_em * 0.7 * scale, scale)
-    inner_square.parent = guides_parent
-    inner_square.location.y = (ascender + descender) / 2 * scale
-    guide_objects.append(inner_square)
+    # Center Y position (font origin is at baseline, typically y=0)
+    center_y = (ascender + descender) / 2 * scale
     
-    # Circle (for reference)
-    circle = create_circle_curve("Circle", units_per_em * 0.5 * scale, scale)
-    circle.parent = guides_parent
-    circle.location.y = (ascender + descender) / 2 * scale
-    guide_objects.append(circle)
-    
-    return guides_parent, guide_objects
-
-
-def create_square_curve(name, size, scale):
-    """Create a square curve object"""
-    curve_data = bpy.data.curves.new(name=name, type='CURVE')
-    curve_data.dimensions = '2D'
-    curve_data.fill_mode = 'NONE'
-    
-    spline = curve_data.splines.new('POLY')
-    spline.points.add(3)  # 4 points total (including the first one)
-    
-    half = size / 2
-    spline.points[0].co = (-half, -half, 0, 1)
-    spline.points[1].co = (half, -half, 0, 1)
-    spline.points[2].co = (half, half, 0, 1)
-    spline.points[3].co = (-half, half, 0, 1)
-    spline.use_cyclic_u = True
-    
-    obj = bpy.data.objects.new(name, curve_data)
-    obj.show_wire = True
-    obj.display_type = 'WIRE'
-    
-    return obj
-
-
-def create_circle_curve(name, radius, scale):
-    """Create a circle curve object"""
-    curve_data = bpy.data.curves.new(name=name, type='CURVE')
-    curve_data.dimensions = '2D'
-    curve_data.fill_mode = 'NONE'
-    
-    spline = curve_data.splines.new('BEZIER')
-    # Circle needs 4 bezier points
-    spline.bezier_points.add(3)
-    
-    # Magic number for circle approximation with bezier
-    magic = 0.551915024494
-    
-    points = [
-        (radius, 0),
-        (0, radius),
-        (-radius, 0),
-        (0, -radius)
+    # Outer square (em square) with offset
+    half_em = em_size / 2
+    outer_verts = [
+        bm.verts.new((offset_x + 0 - half_em, offset_y + center_y - half_em, 0)),
+        bm.verts.new((offset_x + 0 + half_em, offset_y + center_y - half_em, 0)),
+        bm.verts.new((offset_x + 0 + half_em, offset_y + center_y + half_em, 0)),
+        bm.verts.new((offset_x + 0 - half_em, offset_y + center_y + half_em, 0))
     ]
+    for i in range(4):
+        bm.edges.new((outer_verts[i], outer_verts[(i+1)%4]))
     
-    for i, (x, y) in enumerate(points):
-        bp = spline.bezier_points[i]
-        bp.co = (x, y, 0)
-        bp.handle_left_type = 'FREE'
-        bp.handle_right_type = 'FREE'
-        
-        # Set handles for circle
-        if i == 0:  # Right
-            bp.handle_left = (x, -y * magic, 0)
-            bp.handle_right = (x, y * magic, 0)
-        elif i == 1:  # Top
-            bp.handle_left = (x * magic, y, 0)
-            bp.handle_right = (-x * magic, y, 0)
-        elif i == 2:  # Left
-            bp.handle_left = (x, y * magic, 0)
-            bp.handle_right = (x, -y * magic, 0)
-        elif i == 3:  # Bottom
-            bp.handle_left = (-x * magic, y, 0)
-            bp.handle_right = (x * magic, y, 0)
+    # Inner square with offset
+    half_inner = inner_size / 2
+    inner_verts = [
+        bm.verts.new((offset_x + 0 - half_inner, offset_y + center_y - half_inner, 0)),
+        bm.verts.new((offset_x + 0 + half_inner, offset_y + center_y - half_inner, 0)),
+        bm.verts.new((offset_x + 0 + half_inner, offset_y + center_y + half_inner, 0)),
+        bm.verts.new((offset_x + 0 - half_inner, offset_y + center_y + half_inner, 0))
+    ]
+    for i in range(4):
+        bm.edges.new((inner_verts[i], inner_verts[(i+1)%4]))
     
-    spline.use_cyclic_u = True
+    # Circle (approximate with 32 segments) with offset
+    import math
+    segments = 32
+    circle_verts = []
+    for i in range(segments):
+        angle = (i / segments) * 2 * math.pi
+        x = offset_x + circle_radius * math.cos(angle)
+        y = offset_y + center_y + circle_radius * math.sin(angle)
+        circle_verts.append(bm.verts.new((x, y, 0)))
     
-    obj = bpy.data.objects.new(name, curve_data)
-    obj.show_wire = True
+    for i in range(segments):
+        bm.edges.new((circle_verts[i], circle_verts[(i+1)%segments]))
+    
+    bm.to_mesh(mesh)
+    bm.free()
+    
+    # Create object
+    obj = bpy.data.objects.new(f"{glyph_name}_Guide", mesh)
     obj.display_type = 'WIRE'
+    obj.show_wire = True
+    obj.hide_render = True
     
     return obj
 
@@ -213,13 +177,11 @@ def export_ttf_file(filepath, context):
         units_per_em = font['head'].unitsPerEm
         scale = units_per_em 
 
-    # Determine which objects to export
+    # Export all glyphs from the scene (no selection needed)
     objects_to_process = []
-    if context.selected_objects:
-        objects_to_process = context.selected_objects
-    else:
-        # If nothing selected, try to export all objects in the active collection that look like glyphs
-        objects_to_process = context.collection.objects
+    for obj in context.scene.objects:
+        if obj.get("glyph_name"):
+            objects_to_process.append(obj)
         
     for obj in objects_to_process:
         if obj.type != 'CURVE':
