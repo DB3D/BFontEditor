@@ -220,3 +220,97 @@ class BF_OT_RefreshTextDisplay(Operator):
         
         self.report({'INFO'}, f"Refreshed text display with {len(char_list)} characters")
         return {'FINISHED'}
+
+
+class BF_OT_ToggleGuides(Operator):
+    """Toggle visibility of all guide meshes"""
+    bl_idname = "bfont.toggle_guides"
+    bl_label = "Toggle Guides"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        # Find all guide meshes (parents of glyphs)
+        guide_meshes = []
+        for obj in context.scene.objects:
+            # Look for objects with children that have glyph_name
+            if obj.children:
+                for child in obj.children:
+                    if child.get("glyph_name"):
+                        guide_meshes.append(obj)
+                        break
+        
+        if not guide_meshes:
+            self.report({'WARNING'}, "No guide meshes found")
+            return {'CANCELLED'}
+        
+        # Determine current state (if any guide is visible, we hide all; if all hidden, we show all)
+        any_visible = any(not g.hide_viewport for g in guide_meshes)
+        
+        # Toggle visibility
+        for guide in guide_meshes:
+            guide.hide_viewport = any_visible
+            guide.hide_render = True  # Always hide from render
+        
+        state = "hidden" if any_visible else "visible"
+        self.report({'INFO'}, f"Guides {state} ({len(guide_meshes)} objects)")
+        return {'FINISHED'}
+
+
+class BF_OT_SetUsed(Operator):
+    """Mark selected glyphs as used (white color)"""
+    bl_idname = "bfont.set_used"
+    bl_label = "Set Used"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        if not context.selected_objects:
+            self.report({'WARNING'}, "No objects selected")
+            return {'CANCELLED'}
+        
+        count = 0
+        for obj in context.selected_objects:
+            # If this is a curve object directly, color it
+            if obj.type == 'CURVE' and obj.get("glyph_name"):
+                obj.color = (1.0, 1.0, 1.0, 1.0)  # White
+                count += 1
+            # Otherwise check if this is a guide parent
+            else:
+                for child in obj.children:
+                    if child.type == 'CURVE' and child.get("glyph_name"):
+                        # Found the curve character object
+                        child.color = (1.0, 1.0, 1.0, 1.0)  # White
+                        count += 1
+                        break
+        
+        self.report({'INFO'}, f"Marked {count} glyphs as used")
+        return {'FINISHED'}
+
+
+class BF_OT_SetUnused(Operator):
+    """Mark selected glyphs as unused (dark gray color)"""
+    bl_idname = "bfont.set_unused"
+    bl_label = "Set Unused"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        if not context.selected_objects:
+            self.report({'WARNING'}, "No objects selected")
+            return {'CANCELLED'}
+        
+        count = 0
+        for obj in context.selected_objects:
+            # If this is a curve object directly, color it
+            if obj.type == 'CURVE' and obj.get("glyph_name"):
+                obj.color = (0.087282, 0.087282, 0.087282, 1.0)  # Dark gray
+                count += 1
+            # Otherwise check if this is a guide parent
+            else:
+                for child in obj.children:
+                    if child.type == 'CURVE' and child.get("glyph_name"):
+                        # Found the curve character object
+                        child.color = (0.087282, 0.087282, 0.087282, 1.0)  # Dark gray
+                        count += 1
+                        break
+        
+        self.report({'INFO'}, f"Marked {count} glyphs as unused")
+        return {'FINISHED'}

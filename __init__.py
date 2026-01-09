@@ -15,7 +15,10 @@ from .operators import (
     BF_OT_GroupToCenter,
     BF_OT_GroupOrderly,
     BF_OT_DisplayAsText,
-    BF_OT_RefreshTextDisplay
+    BF_OT_RefreshTextDisplay,
+    BF_OT_ToggleGuides,
+    BF_OT_SetUsed,
+    BF_OT_SetUnused
 )
 
 bl_info = {
@@ -38,6 +41,9 @@ classes = (
     BF_OT_GroupOrderly,
     BF_OT_DisplayAsText,
     BF_OT_RefreshTextDisplay,
+    BF_OT_ToggleGuides,
+    BF_OT_SetUsed,
+    BF_OT_SetUnused,
     BF_PT_MainPanel,
 )
 

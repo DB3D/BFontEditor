@@ -38,6 +38,16 @@ class BF_PT_MainPanel(bpy.types.Panel):
         box.label(text="Utilities:")
         box.operator("bfont.group_to_center", text="Group to Center", icon='SNAP_FACE_CENTER')
         box.operator("bfont.group_orderly", text="Group Orderly", icon='GRID')
+        box.operator("bfont.toggle_guides", text="Toggle Guides", icon='HIDE_OFF')
+        
+        layout.separator()
+        
+        # Mark Used/Unused
+        box = layout.box()
+        box.label(text="Mark Glyphs:")
+        row = box.row(align=True)
+        row.operator("bfont.set_used", text="Set Used", icon='CHECKMARK')
+        row.operator("bfont.set_unused", text="Set Unused", icon='X')
         
         layout.separator()
         
