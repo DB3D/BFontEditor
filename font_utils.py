@@ -177,17 +177,21 @@ def export_ttf_file(filepath, context):
         units_per_em = font['head'].unitsPerEm
         scale = units_per_em 
 
-    # Export all glyphs from the scene (no selection needed)
-    objects_to_process = []
+    # Find all guide parents that have glyph children
+    guide_parents = []
     for obj in context.scene.objects:
-        if obj.get("glyph_name"):
-            objects_to_process.append(obj)
+        if obj.children:
+            for child in obj.children:
+                if child.get("glyph_name"):
+                    guide_parents.append((obj, child.get("glyph_name")))
+                    break
+    
+    # Also find standalone glyph objects (not parented)
+    for obj in context.scene.objects:
+        if obj.get("glyph_name") and obj.parent is None:
+            guide_parents.append((None, obj.get("glyph_name")))
         
-    for obj in objects_to_process:
-        if obj.type != 'CURVE':
-            continue
-            
-        glyph_name = obj.get("glyph_name")
+    for guide_parent, glyph_name in guide_parents:
         if not glyph_name:
             continue
             
@@ -197,7 +201,23 @@ def export_ttf_file(filepath, context):
         pen = Cu2QuPen(tt_pen, max_err=1.0, reverse_direction=False)
         
         try:
-            write_blender_curve_to_pen(obj, pen, scale)
+            # Collect all children of the guide parent (or the standalone object)
+            if guide_parent:
+                children_to_export = list(guide_parent.children)
+            else:
+                # Find standalone glyph object
+                children_to_export = [obj for obj in context.scene.objects 
+                                      if obj.get("glyph_name") == glyph_name and obj.parent is None]
+            
+            # Process each child
+            for child in children_to_export:
+                curve_obj = convert_to_curve_if_needed(child, context)
+                if curve_obj and curve_obj.type == 'CURVE':
+                    write_blender_curve_to_pen(curve_obj, pen, scale)
+                    
+                    # Clean up temporary converted object
+                    if curve_obj != child:
+                        bpy.data.objects.remove(curve_obj)
             
             # Get the glyph object from the underlying TTGlyphPen
             new_glyph = tt_pen.glyph()
@@ -206,16 +226,55 @@ def export_ttf_file(filepath, context):
             glyf_table[glyph_name] = new_glyph
             
             # Update metrics if needed (width). 
-            if "advance_width" in obj:
-                width = int(obj["advance_width"] * scale)
-                lsb = hmtx_table[glyph_name][1] # preserve LSB? or recalculate?
-                hmtx_table[glyph_name] = (width, lsb)
+            # Check first child for advance_width
+            if children_to_export:
+                first_child = children_to_export[0]
+                if "advance_width" in first_child:
+                    width = int(first_child["advance_width"] * scale)
+                    lsb = hmtx_table[glyph_name][1]
+                    hmtx_table[glyph_name] = (width, lsb)
                 
         except Exception as e:
             print(f"Failed to export glyph {glyph_name}: {e}")
 
     font.save(filepath)
     return {'FINISHED'}
+
+
+def convert_to_curve_if_needed(obj, context):
+    """Convert mesh or text object to curve. Returns original if already a curve."""
+
+    match obj.type:
+
+        case 'CURVE':
+            return obj
+
+        case 'MESH':
+            # Convert mesh to curve
+            # Create a temporary copy and convert
+            temp_mesh = obj.copy()
+            temp_mesh.data = obj.data.copy()
+            context.collection.objects.link(temp_mesh)
+            # Select and convert
+            bpy.ops.object.select_all(action='DESELECT')
+            temp_mesh.select_set(True)
+            context.view_layer.objects.active = temp_mesh
+            bpy.ops.object.convert(target='CURVE')
+            return temp_mesh
+
+        case 'FONT':
+            # Convert text to curve
+            temp_text = obj.copy()
+            temp_text.data = obj.data.copy()
+            context.collection.objects.link(temp_text)
+            # Select and convert
+            bpy.ops.object.select_all(action='DESELECT')
+            temp_text.select_set(True)
+            context.view_layer.objects.active = temp_text
+            bpy.ops.object.convert(target='CURVE')
+            return temp_text
+
+    return None
 
 
 def report_missing_fonttools():
@@ -335,6 +394,24 @@ class BlenderImportPen(BasePen):
 def write_blender_curve_to_pen(obj, pen, scale):
     curve = obj.data
     if not curve: return
+    
+    # Use matrix_local to get transform relative to parent (not world position)
+    # This way moving guide parents doesn't affect glyph coordinates
+    # matrix_local = transform relative to parent
+    # matrix_basis = object's own transform (ignoring parent)
+    # We use matrix_basis if no parent, otherwise matrix_local
+    if obj.parent:
+        matrix = obj.matrix_local
+    else:
+        matrix = obj.matrix_basis
+    
+    def transform_point(pt):
+        """Transform a point by the object's local matrix and apply scale"""
+        transformed = matrix @ pt
+        # Clamp to TTF valid range (-32768 to 32767) after scaling
+        x = max(-32768, min(32767, int(transformed.x * scale)))
+        y = max(-32768, min(32767, int(transformed.y * scale)))
+        return (x, y)
 
     for spline in curve.splines:
         if spline.type != 'BEZIER':
@@ -345,8 +422,8 @@ def write_blender_curve_to_pen(obj, pen, scale):
             continue
 
         # Start
-        start_pt = points[0].co
-        pen.moveTo((start_pt.x * scale, start_pt.y * scale))
+        start_pt = transform_point(points[0].co)
+        pen.moveTo(start_pt)
         
         for i in range(1, len(points)):
             p0 = points[i-1]
@@ -358,19 +435,15 @@ def write_blender_curve_to_pen(obj, pen, scale):
             
             if is_line:
                 # Straight line segment
-                pen.lineTo((p1.co.x * scale, p1.co.y * scale))
+                pen.lineTo(transform_point(p1.co))
             else:
                 # Curved segment
                 # p0 is start, p0.handle_right is c1, p1.handle_left is c2, p1.co is end
-                c1 = p0.handle_right
-                c2 = p1.handle_left
-                end = p1.co
+                c1 = transform_point(p0.handle_right)
+                c2 = transform_point(p1.handle_left)
+                end = transform_point(p1.co)
                 
-                pen.curveTo(
-                    (c1.x * scale, c1.y * scale),
-                    (c2.x * scale, c2.y * scale),
-                    (end.x * scale, end.y * scale)
-                )
+                pen.curveTo(c1, c2, end)
             
         if spline.use_cyclic_u:
             # Connect last to first
@@ -381,17 +454,13 @@ def write_blender_curve_to_pen(obj, pen, scale):
             is_line = (p0.handle_right_type == 'VECTOR' and p1.handle_left_type == 'VECTOR')
             
             if is_line:
-                pen.lineTo((p1.co.x * scale, p1.co.y * scale))
+                pen.lineTo(transform_point(p1.co))
             else:
-                c1 = p0.handle_right
-                c2 = p1.handle_left
-                end = p1.co
+                c1 = transform_point(p0.handle_right)
+                c2 = transform_point(p1.handle_left)
+                end = transform_point(p1.co)
                 
-                pen.curveTo(
-                    (c1.x * scale, c1.y * scale),
-                    (c2.x * scale, c2.y * scale),
-                    (end.x * scale, end.y * scale)
-                )
+                pen.curveTo(c1, c2, end)
             pen.closePath()
         else:
             pen.endPath()

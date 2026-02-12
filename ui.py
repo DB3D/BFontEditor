@@ -47,9 +47,7 @@ class BF_PT_MainPanel(bpy.types.Panel):
         box = layout.box()
         box.label(text="Font File:")
         if hasattr(context.scene, 'bfont_filepath') and context.scene.bfont_filepath:
-            # Display filepath (read-only)
             row = box.row()
-            row.enabled = False
             row.prop(context.scene, "bfont_filepath", text="")
         else:
             box.label(text="No font loaded", icon='INFO')
@@ -80,6 +78,15 @@ class BF_PT_MainPanel(bpy.types.Panel):
         row = box.row(align=True)
         row.operator("bfont.set_used", text="Set Used", icon='CHECKMARK')
         row.operator("bfont.set_unused", text="Set Unused", icon='X')
+        
+        layout.separator()
+        
+        # Apply to Selection
+        box = layout.box()
+        box.label(text="Copy Glyph:")
+        box.operator("bfont.apply_active_to_selected", text="Apply Active to Selected", icon='DUPLICATE')
+        box.operator("bfont.merge_into_selected", text="Merge Into Selected", icon='MOD_BOOLEAN')
+        box.operator("bfont.fix_glyph_data", text="Fix All Glyph Data", icon='FILE_REFRESH')
         
         layout.separator()
         

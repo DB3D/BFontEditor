@@ -376,3 +376,265 @@ Glyph Name: {glyph_name}"""
     
     def invoke(self, context, event):
         return context.window_manager.invoke_props_dialog(self)
+
+
+class BF_OT_ApplyActiveToSelected(Operator):
+    """Copy all curves/meshes/text from active guide to selected guides"""
+    bl_idname = "bfont.apply_active_to_selected"
+    bl_label = "Apply Active to Selected"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    keep_existing: bpy.props.BoolProperty(
+        name="Keep Existing",
+        description="Keep existing children on target guides",
+        default=False
+    )
+    
+    def execute(self, context):
+        active = context.active_object
+        
+        # Check if active is a guide parent (has glyph children)
+        if not active:
+            self.report({'ERROR'}, "No active object")
+            return {'CANCELLED'}
+        
+        # Build a lookup table from glyph_name to unicode from ALL scene data FIRST
+        unicode_lookup = {}
+        for obj in context.scene.objects:
+            if obj.get("glyph_name") and obj.get("unicode"):
+                unicode_lookup[obj.get("glyph_name")] = obj.get("unicode")
+        
+        # Find source children (from active guide)
+        source_children = []
+        active_is_guide = False
+        
+        for child in active.children:
+            if child.get("glyph_name") or child.type in ('CURVE', 'MESH', 'FONT'):
+                source_children.append(child)
+                active_is_guide = True
+        
+        if not active_is_guide:
+            self.report({'ERROR'}, "Active object is not a guide parent (no valid children)")
+            return {'CANCELLED'}
+        
+        if not source_children:
+            self.report({'ERROR'}, "Active guide has no children to copy")
+            return {'CANCELLED'}
+        
+        # Find target guides (selected, excluding active)
+        target_guides = []
+        for obj in context.selected_objects:
+            if obj == active:
+                continue
+            # Check if it's a guide (has children with glyph_name or is a guide mesh)
+            is_guide = False
+            for child in obj.children:
+                if child.get("glyph_name"):
+                    is_guide = True
+                    break
+            # Also check if it's named as a guide
+            if "_Guide" in obj.name:
+                is_guide = True
+            if is_guide:
+                target_guides.append(obj)
+        
+        if not target_guides:
+            self.report({'ERROR'}, "No target guides selected")
+            return {'CANCELLED'}
+        
+        copied_count = 0
+        
+        for target_guide in target_guides:
+            # Extract glyph_name from guide name (handle .001 suffix)
+            target_glyph_name = target_guide.name.replace("_Guide", "").split(".")[0]
+            
+            # Get unicode from lookup table
+            target_unicode = unicode_lookup.get(target_glyph_name)
+            
+            # Optionally remove existing children
+            if not self.keep_existing:
+                for child in list(target_guide.children):
+                    if child.type in ('CURVE', 'MESH', 'FONT'):
+                        bpy.data.objects.remove(child, do_unlink=True)
+            
+            # Copy each source child to target
+            for source in source_children:
+                # Duplicate object and data
+                new_obj = source.copy()
+                new_obj.data = source.data.copy()
+                
+                # Link to scene
+                context.collection.objects.link(new_obj)
+                
+                # Parent to target guide
+                new_obj.parent = target_guide
+                new_obj.matrix_parent_inverse = target_guide.matrix_world.inverted()
+                
+                # Copy the local transform from source
+                new_obj.matrix_local = source.matrix_local.copy()
+                
+                # Update glyph_name to match target
+                new_obj["glyph_name"] = target_glyph_name
+                
+                # Set unicode from lookup
+                if target_unicode:
+                    new_obj["unicode"] = target_unicode
+                
+                copied_count += 1
+        
+        self.report({'INFO'}, f"Copied {len(source_children)} objects to {len(target_guides)} guides ({copied_count} total)")
+        return {'FINISHED'}
+    
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self)
+
+
+class BF_OT_FixGlyphData(Operator):
+    """Fix/restore glyph_name and unicode on ALL guides' children in scene"""
+    bl_idname = "bfont.fix_glyph_data"
+    bl_label = "Fix All Glyph Data"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        # Load the TTF to get the authoritative cmap (glyph_name -> unicode)
+        filepath = context.scene.bfont_filepath if hasattr(context.scene, 'bfont_filepath') else ""
+        
+        # Build glyph_name -> unicode lookup from the TTF file
+        unicode_lookup = {}
+        if filepath:
+            try:
+                from fontTools.ttLib import TTFont
+                font = TTFont(filepath)
+                cmap = font.getBestCmap()
+                # cmap is unicode_code -> glyph_name, we need the reverse
+                for code, name in cmap.items():
+                    unicode_lookup[name] = code
+                font.close()
+            except Exception as e:
+                self.report({'WARNING'}, f"Could not load TTF for lookup: {e}")
+        
+        if not unicode_lookup:
+            self.report({'ERROR'}, "No font file loaded or cmap empty. Import a font first.")
+            return {'CANCELLED'}
+        
+        fixed_count = 0
+        
+        # Process ALL objects in the scene that end with _Guide
+        for obj in context.scene.objects:
+            if not obj.name.endswith("_Guide") and "_Guide." not in obj.name:
+                continue
+            
+            # Extract glyph name: "zero_Guide" -> "zero", "A_Guide.001" -> "A"
+            base_name = obj.name.split(".")[0]  # Strip .001 suffix
+            glyph_name = base_name.replace("_Guide", "")
+            
+            # Get unicode from the TTF cmap lookup
+            unicode_val = unicode_lookup.get(glyph_name)
+            
+            # Fix all children parented to this guide
+            for child in obj.children:
+                if child.type in ('CURVE', 'MESH', 'FONT'):
+                    child["glyph_name"] = glyph_name
+                    if unicode_val:
+                        child["unicode"] = unicode_val
+                    fixed_count += 1
+        
+        self.report({'INFO'}, f"Fixed {fixed_count} glyph objects ({len(unicode_lookup)} glyphs in cmap)")
+        return {'FINISHED'}
+
+
+class BF_OT_MergeIntoSelected(Operator):
+    """Merge active curve into the main curve of each selected guide"""
+    bl_idname = "bfont.merge_into_selected"
+    bl_label = "Merge Into Selected Guides"
+    bl_options = {'REGISTER', 'UNDO'}
+    
+    def execute(self, context):
+        active = context.active_object
+        
+        if not active:
+            self.report({'ERROR'}, "No active object")
+            return {'CANCELLED'}
+        
+        if active.type != 'CURVE':
+            self.report({'ERROR'}, "Active object must be a curve")
+            return {'CANCELLED'}
+        
+        # Find target guides (selected, excluding active and its parent)
+        target_guides = []
+        for obj in context.selected_objects:
+            if obj == active or obj == active.parent:
+                continue
+            if obj.name.endswith("_Guide") or "_Guide." in obj.name:
+                target_guides.append(obj)
+        
+        if not target_guides:
+            self.report({'ERROR'}, "No target guides selected (select guides, make curve active)")
+            return {'CANCELLED'}
+        
+        merged_count = 0
+        
+        for guide in target_guides:
+            # Find the main curve child (the one whose name matches the guide minus _Guide)
+            guide_base = guide.name.split(".")[0].replace("_Guide", "")
+            main_curve = None
+            for child in guide.children:
+                if child.type == 'CURVE' and child.get("glyph_name"):
+                    main_curve = child
+                    break
+            
+            if not main_curve:
+                # No main curve found, skip
+                print(f"No main curve found for guide {guide.name}")
+                continue
+            
+            # Copy splines from active curve into the main curve
+            source_data = active.data
+            target_data = main_curve.data
+            
+            # Take active's own transform (scale/rotation) but strip position
+            # This moves the shape to the target guide's origin
+            from mathutils import Matrix
+            basis = active.matrix_basis.copy()
+            basis.translation = (0, 0, 0)
+            offset_matrix = basis
+            
+            for src_spline in source_data.splines:
+                if src_spline.type == 'BEZIER':
+                    new_spline = target_data.splines.new('BEZIER')
+                    # Add points (spline starts with 1 point)
+                    if len(src_spline.bezier_points) > 1:
+                        new_spline.bezier_points.add(len(src_spline.bezier_points) - 1)
+                    
+                    for i, src_pt in enumerate(src_spline.bezier_points):
+                        dst_pt = new_spline.bezier_points[i]
+                        
+                        # Transform points to guide's local space
+                        co = offset_matrix @ src_pt.co
+                        hl = offset_matrix @ src_pt.handle_left
+                        hr = offset_matrix @ src_pt.handle_right
+                        
+                        dst_pt.co = co
+                        dst_pt.handle_left = hl
+                        dst_pt.handle_right = hr
+                        dst_pt.handle_left_type = src_pt.handle_left_type
+                        dst_pt.handle_right_type = src_pt.handle_right_type
+                    
+                    new_spline.use_cyclic_u = src_spline.use_cyclic_u
+                
+                elif src_spline.type == 'POLY':
+                    new_spline = target_data.splines.new('POLY')
+                    if len(src_spline.points) > 1:
+                        new_spline.points.add(len(src_spline.points) - 1)
+                    
+                    for i, src_pt in enumerate(src_spline.points):
+                        dst_pt = new_spline.points[i]
+                        co = offset_matrix @ src_pt.co.to_3d()
+                        dst_pt.co = (co.x, co.y, co.z, src_pt.co.w)
+                    
+                    new_spline.use_cyclic_u = src_spline.use_cyclic_u
+            
+            merged_count += 1
+        
+        self.report({'INFO'}, f"Merged curve into {merged_count} guides")
+        return {'FINISHED'}

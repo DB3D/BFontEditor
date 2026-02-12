@@ -19,7 +19,10 @@ from .operators import (
     BF_OT_ToggleGuides,
     BF_OT_SetUsed,
     BF_OT_SetUnused,
-    BF_OT_CopyCharInfo
+    BF_OT_CopyCharInfo,
+    BF_OT_ApplyActiveToSelected,
+    BF_OT_FixGlyphData,
+    BF_OT_MergeIntoSelected
 )
 
 bl_info = {
@@ -46,6 +49,9 @@ classes = (
     BF_OT_SetUsed,
     BF_OT_SetUnused,
     BF_OT_CopyCharInfo,
+    BF_OT_ApplyActiveToSelected,
+    BF_OT_FixGlyphData,
+    BF_OT_MergeIntoSelected,
     BF_PT_MainPanel,
 )
 
